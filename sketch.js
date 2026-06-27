@@ -1,0 +1,405 @@
+let magnets = [];
+let selected = null;
+let offset, scaler;
+let bg, hazeLayer, button, shuffleBtn;
+let currentPoemMagnets = [];
+let dragMoved = false;
+let hazeBursts = [];
+
+const SPRING_K = 0.12;
+const DAMPING = 0.75;
+const ANG_K = 0.12;
+const ANG_DAMP = 0.75;
+
+const palette = [
+  [255, 70, 130],
+  [255, 150, 60],
+  [255, 230, 90],
+  [80, 255, 180],
+  [80, 230, 255],
+  [120, 150, 255],
+  [190, 100, 255]
+];
+
+const determiners = [
+  "the","a","this","that","my","your",
+  "这","那","我的","你的",
+  "이","그","내","너의",
+  "この","その","私の","君の",
+  "le","la","un","une","ce","cette","mon","ton"
+];
+
+const adjectives = [
+  "quiet","soft","blue","lonely","bright","neon","silver","warm","cold","gentle",
+  "安静","柔软","蓝色","孤独","明亮","霓虹","银色","温暖","冰冷","温柔",
+  "조용한","부드러운","푸른","외로운","밝은","네온","은빛","따뜻한","차가운","다정한",
+  "静かな","やわらかい","青い","孤独な","明るい","ネオンの","銀色の","暖かい","冷たい","優しい",
+  "calme","doux","bleu","solitaire","brillant","néon","argenté","chaud","froid","tendre"
+];
+
+const nouns = [
+  "moon","city","memory","river","dream","shadow","sky","flower","light","ghost","garden","night",
+  "月亮","城市","记忆","河流","梦","影子","天空","花","光","幽灵","花园","夜晚",
+  "달","도시","기억","강","꿈","그림자","하늘","꽃","빛","유령","정원","밤",
+  "月","都市","記憶","川","夢","影","空","花","光","幽霊","庭","夜",
+  "lune","ville","mémoire","rivière","rêve","ombre","ciel","fleur","lumière","fantôme","jardin","nuit"
+];
+
+const verbs = [
+  "glows","drifts","sings","waits","fades","returns","breathes","opens","shines","vanishes",
+  "发光","漂流","歌唱","等待","消失","归来","呼吸","打开","闪耀","消散",
+  "빛난다","흐른다","노래한다","기다린다","사라진다","돌아온다","숨쉰다","열린다","반짝인다","흩어진다",
+  "光る","漂う","歌う","待つ","消える","戻る","息をする","開く","輝く","消えていく",
+  "brille","dérive","chante","attend","s’efface","revient","respire","s’ouvre","scintille","disparaît"
+];
+
+const adverbs = [
+  "softly","slowly","briefly","quietly","again","gently","tonight",
+  "轻轻地","慢慢地","短暂地","安静地","再次","温柔地","今晚",
+  "부드럽게","천천히","잠깐","조용히","다시","다정하게","오늘밤",
+  "そっと","ゆっくり","一瞬","静かに","また","優しく","今夜",
+  "doucement","lentement","brièvement","silencieusement","encore","tendrement","ce soir"
+];
+
+const prepositions = [
+  "above","beneath","near","inside","through","beside","beyond",
+  "在上方","在下方","靠近","里面","穿过","旁边","之外",
+  "위에","아래에","가까이","안에","지나","곁에","너머",
+  "上に","下に","近く","中で","通って","そばに","向こうへ",
+  "au-dessus","sous","près de","dans","à travers","près","au-delà"
+];
+
+const words = Array.from(new Set([
+  ...determiners, ...adjectives, ...nouns, ...verbs, ...adverbs, ...prepositions
+]));
+
+function randomFrom(arr) {
+  return arr[floor(random(arr.length))];
+}
+
+function hashWord(str) {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) >>> 0;
+  return h;
+}
+
+function colorForWord(word) {
+  return palette[hashWord(word) % palette.length];
+}
+
+class Magnet {
+  constructor(pos, val, ang = 0) {
+    this.pos = pos.copy();
+    this.target = pos.copy();
+    this.vel = createVector(0, 0);
+    this.ang = ang;
+    this.angTarget = ang;
+    this.angVel = 0;
+    this.val = val;
+    this.home = pos.copy();
+    this.isInPoem = false;
+    this.displayCap = false;
+    this.displaySuffix = "";
+    this.displayOverride = "";
+    this.col = 255;
+    this.updateDimensions();
+  }
+
+  text() {
+    let t = this.displayOverride || this.val;
+    if (this.displayCap && /^[a-zA-ZÀ-ÿ]/.test(t)) {
+      t = t.charAt(0).toUpperCase() + t.slice(1);
+    }
+    return t + this.displaySuffix;
+  }
+
+  surface() {
+    return (this.displayOverride || this.val).toLowerCase();
+  }
+
+  updateDimensions() {
+    textSize(13 * scaler);
+    this.w = textWidth(this.text()) + 18 * scaler;
+    this.h = 30 * scaler;
+  }
+
+  update() {
+    this.vel.x += (this.target.x - this.pos.x) * SPRING_K - this.vel.x * DAMPING;
+    this.vel.y += (this.target.y - this.pos.y) * SPRING_K - this.vel.y * DAMPING;
+    this.pos.add(this.vel);
+
+    this.angVel += (this.angTarget - this.ang) * ANG_K - this.angVel * ANG_DAMP;
+    this.ang += this.angVel;
+  }
+
+  contains(px, py) {
+    return abs(px - this.pos.x) < this.w / 2 && abs(py - this.pos.y) < this.h / 2;
+  }
+
+  show() {
+    push();
+    translate(this.pos.x, this.pos.y);
+    rotate(this.ang);
+    rectMode(CENTER);
+
+    noStroke();
+    fill(0, 95);
+    rect(2, 2, this.w, this.h, 5);
+
+    stroke(0, 90);
+    fill(this.col);
+    rect(0, 0, this.w, this.h, 5);
+
+    noStroke();
+    fill(0);
+    textAlign(CENTER, CENTER);
+    textSize(13 * scaler);
+    text(this.text(), 0, 1);
+
+    pop();
+  }
+}
+
+function setup() {
+  createCanvas(windowWidth, windowHeight);
+  scaler = height / 628;
+  textFont("system-ui");
+
+  bg = createGraphics(width, height);
+  hazeLayer = createGraphics(width, height);
+
+  makeBackground();
+
+  button = createButton("Scatter Magnets and Start Over");
+  button.position(8, 8);
+  button.mousePressed(resetEverything);
+
+  shuffleBtn = createButton("Shuffle Poem");
+  shuffleBtn.position(8, 48);
+  shuffleBtn.mousePressed(shufflePoem);
+
+  makeMagnets();
+  makePoem();
+}
+
+function makeBackground() {
+  bg.background(8, 9, 14);
+  bg.textAlign(CENTER, CENTER);
+  bg.textSize(12);
+
+  const chars = ["夢","빛","月","r","ê","0","1","夜","城","影","花","m","n"];
+
+  for (let y = 0; y < height; y += 18) {
+    for (let x = 0; x < width; x += 18) {
+      bg.noStroke();
+      bg.fill(180, 220, 255, random(8, 28));
+      bg.text(random(chars), x, y);
+    }
+  }
+
+  bg.stroke(255, 12);
+  for (let y = 0; y < height; y += 3) bg.line(0, y, width, y);
+}
+
+function makeMagnets() {
+  magnets = [];
+
+  for (let w of words) {
+    let x = random(-width * 0.45, width * 0.45);
+    let y = random(-height * 0.42, height * 0.42);
+
+    if (abs(x) < width * 0.18) x += width * 0.25 * random([-1, 1]);
+    if (abs(y) < height * 0.12) y += height * 0.25 * random([-1, 1]);
+
+    magnets.push(new Magnet(createVector(x, y), w, random(-0.12, 0.12)));
+  }
+}
+
+function makePoem() {
+  for (let m of magnets) {
+    if (m.isInPoem) {
+      m.isInPoem = false;
+      m.displayCap = false;
+      m.displaySuffix = "";
+      m.displayOverride = "";
+      m.target = m.home.copy();
+      m.angTarget = random(-0.12, 0.12);
+    }
+  }
+
+  const templates = [
+    ["DET","ADJ","NOUN","VERB","ADV","PREP","DET","NOUN"],
+    ["DET","NOUN","VERB","PREP","DET","ADJ","NOUN","ADV"],
+    ["DET","ADJ","NOUN","VERB","PREP","DET","NOUN","ADV"]
+  ];
+
+  const template = randomFrom(templates);
+
+  const chosenWords = template.map(tag => {
+    if (tag === "DET") return randomFrom(determiners);
+    if (tag === "ADJ") return randomFrom(adjectives);
+    if (tag === "NOUN") return randomFrom(nouns);
+    if (tag === "VERB") return randomFrom(verbs);
+    if (tag === "ADV") return randomFrom(adverbs);
+    if (tag === "PREP") return randomFrom(prepositions);
+  });
+
+  let chosen = chosenWords.map(w => magnets.find(m => m.val === w)).filter(Boolean);
+  if (chosen.length < 8) return;
+
+  chosen.forEach(m => {
+    m.displayCap = false;
+    m.displaySuffix = "";
+    m.displayOverride = "";
+  });
+
+  chosen[0].displayCap = true;
+  chosen[7].displaySuffix = ".";
+  chosen.forEach(m => m.updateDimensions());
+
+  let gap = 10 * scaler;
+  let totalW = chosen.reduce((s, m) => s + m.w, 0) + gap * 7;
+  let x = -totalW / 2;
+
+  currentPoemMagnets = [];
+
+  for (let m of chosen) {
+    m.isInPoem = true;
+    m.target.set(x + m.w / 2, 0);
+    m.angTarget = 0;
+    currentPoemMagnets.push(m);
+    x += m.w + gap;
+  }
+
+  triggerHaze();
+}
+
+function triggerHaze() {
+  hazeBursts = [];
+
+  for (let i = 0; i < currentPoemMagnets.length; i++) {
+    let m = currentPoemMagnets[i];
+    hazeBursts.push({
+      x: width / 2 + m.target.x,
+      y: height / 2 + m.target.y,
+      c: colorForWord(m.surface()),
+      age: -i * 5,
+      life: 70
+    });
+  }
+}
+
+function drawHaze() {
+  hazeLayer.clear();
+  hazeLayer.noStroke();
+
+  for (let b of hazeBursts) {
+    b.age++;
+    if (b.age < 0 || b.age > b.life) continue;
+
+    let t = b.age / b.life;
+    let alpha = 70 * sin(PI * t);
+    let size = (80 + 150 * t) * scaler;
+
+    hazeLayer.fill(b.c[0], b.c[1], b.c[2], alpha);
+    hazeLayer.circle(b.x, b.y, size);
+
+    hazeLayer.fill(b.c[0], b.c[1], b.c[2], alpha * 0.35);
+    hazeLayer.circle(b.x + random(-10, 10), b.y + random(-10, 10), size * 0.55);
+  }
+
+  image(hazeLayer, 0, 0);
+  hazeBursts = hazeBursts.filter(b => b.age <= b.life);
+}
+
+function draw() {
+  image(bg, 0, 0);
+  drawHaze();
+
+  translate(width / 2, height / 2);
+
+  for (let m of magnets) {
+    if (m !== selected) m.update();
+    m.show();
+  }
+}
+
+function shufflePoem() {
+  makePoem();
+}
+
+function resetEverything() {
+  makeMagnets();
+  makePoem();
+}
+
+function mousePressed() {
+  dragMoved = false;
+
+  for (let i = magnets.length - 1; i >= 0; i--) {
+    let m = magnets[i];
+    if (m.contains(mouseX - width / 2, mouseY - height / 2)) {
+      selected = m;
+      offset = createVector(m.pos.x - mouseX, m.pos.y - mouseY);
+      m.col = 210;
+      break;
+    }
+  }
+}
+
+function mouseDragged() {
+  if (selected) {
+    selected.pos.x = mouseX + offset.x;
+    selected.pos.y = mouseY + offset.y;
+    selected.target.set(selected.pos.x, selected.pos.y);
+    dragMoved = true;
+  }
+}
+
+function mouseReleased() {
+  if (selected) {
+    selected.col = 255;
+
+    if (!selected.isInPoem) {
+      selected.home = selected.pos.copy();
+    } else if (!dragMoved) {
+      swapWord(selected);
+      triggerHaze();
+    }
+
+    selected = null;
+  }
+}
+
+function swapWord(m) {
+  let pool = nouns;
+
+  if (determiners.includes(m.val)) pool = determiners;
+  else if (adjectives.includes(m.val)) pool = adjectives;
+  else if (nouns.includes(m.val)) pool = nouns;
+  else if (verbs.includes(m.val)) pool = verbs;
+  else if (adverbs.includes(m.val)) pool = adverbs;
+  else if (prepositions.includes(m.val)) pool = prepositions;
+
+  let next = randomFrom(pool);
+  while (next === m.surface()) next = randomFrom(pool);
+
+  m.displayOverride = next;
+  m.updateDimensions();
+}
+
+function keyPressed() {
+  if (key === " " || key === "s" || key === "S") shufflePoem();
+}
+
+function doubleClicked() {
+  shufflePoem();
+}
+
+function windowResized() {
+  resizeCanvas(windowWidth, windowHeight);
+  scaler = height / 628;
+  bg = createGraphics(width, height);
+  hazeLayer = createGraphics(width, height);
+  makeBackground();
+}
